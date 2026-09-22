@@ -12,4 +12,8 @@ public sealed class PlayerData
 
     [JsonPropertyName("lastFetch")]
     public DateTime LastFetch { get; set; }
+
+    // Runtime only - not saved to JSON
+    [JsonIgnore]
+    public int AppliedBadgeId { get; set; }
 }
