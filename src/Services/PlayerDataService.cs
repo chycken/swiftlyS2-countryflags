@@ -7,9 +7,11 @@ namespace swiftlyS2_countryflags.Services;
 public sealed class PlayerDataService : IDisposable
 {
     private readonly string _dataPath;
+
     private readonly ConcurrentDictionary<ulong, PlayerData> _playerData = new();
+
     private readonly SemaphoreSlim _fileLock = new(1, 1);
-    
+
     private volatile bool _hasDirtyData;
     private bool _disposed;
 
@@ -26,49 +28,77 @@ public sealed class PlayerDataService : IDisposable
 
     public int Count => _playerData.Count;
 
-    public PlayerData GetOrCreate(ulong steamId, bool defaultShowStatus)
+    public PlayerData GetOrCreate(
+        ulong steamId,
+        bool defaultShowStatus)
     {
-        return _playerData.GetOrAdd(steamId, _ => new PlayerData
-        {
-            ShowFlag = defaultShowStatus,
-            CountryCode = string.Empty,
-            LastFetch = DateTime.MinValue
-        });
+        return _playerData.GetOrAdd(
+            steamId,
+            _ => new PlayerData
+            {
+                ShowFlag = defaultShowStatus,
+                CountryCode = string.Empty,
+                LastFetch = DateTime.MinValue
+            });
     }
 
-    public bool TryGetPlayer(ulong steamId, out PlayerData? data)
+    public bool TryGetPlayer(
+        ulong steamId,
+        out PlayerData? data)
     {
-        return _playerData.TryGetValue(steamId, out data);
+        return _playerData.TryGetValue(
+            steamId,
+            out data);
     }
 
-    public void MarkDirty() => _hasDirtyData = true;
+    public void MarkDirty()
+    {
+        _hasDirtyData = true;
+    }
 
     public void SaveIfDirty()
     {
-        if (!_hasDirtyData)
+        if (_disposed || !_hasDirtyData)
             return;
 
         _hasDirtyData = false;
+
         _ = SaveAsync();
     }
 
     public async Task LoadAsync()
     {
-        if (!File.Exists(_dataPath))
+        if (_disposed || !File.Exists(_dataPath))
             return;
 
-        var json = await File.ReadAllTextAsync(_dataPath).ConfigureAwait(false);
-        
-        if (string.IsNullOrEmpty(json))
-            return;
-
-        var data = JsonSerializer.Deserialize<Dictionary<ulong, PlayerData>>(json, JsonOptions);
-        if (data == null)
-            return;
-
-        foreach (var (steamId, playerData) in data)
+        try
         {
-            _playerData.TryAdd(steamId, playerData);
+            var json =
+                await File.ReadAllTextAsync(_dataPath)
+                    .ConfigureAwait(false);
+
+            if (string.IsNullOrEmpty(json))
+                return;
+
+            var data =
+                JsonSerializer.Deserialize<
+                    Dictionary<ulong, PlayerData>>(
+                        json,
+                        JsonOptions);
+
+            if (data == null)
+                return;
+
+            foreach (var (steamId, playerData) in data)
+            {
+                _playerData.TryAdd(
+                    steamId,
+                    playerData);
+            }
+        }
+        catch
+        {
+            // Keep the server running if cache loading fails.
         }
     }
 
@@ -77,29 +107,42 @@ public sealed class PlayerDataService : IDisposable
         if (_disposed)
             return;
 
-        if (!await _fileLock.WaitAsync(1000).ConfigureAwait(false))
+        if (!await _fileLock
+                .WaitAsync(1000)
+                .ConfigureAwait(false))
+        {
             return;
+        }
 
         try
         {
-            var directory = Path.GetDirectoryName(_dataPath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            var directory =
+                Path.GetDirectoryName(_dataPath);
+
+            if (!string.IsNullOrEmpty(directory) &&
+                !Directory.Exists(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
-            var snapshot = _playerData.ToDictionary(
-                kvp => kvp.Key, 
-                kvp => new PlayerData
-                {
-                    ShowFlag = kvp.Value.ShowFlag,
-                    CountryCode = kvp.Value.CountryCode,
-                    LastFetch = kvp.Value.LastFetch
-                }
-            );
+            var snapshot =
+                _playerData.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => new PlayerData
+                    {
+                        ShowFlag = kvp.Value.ShowFlag,
+                        CountryCode = kvp.Value.CountryCode,
+                        LastFetch = kvp.Value.LastFetch
+                    });
 
-            var json = JsonSerializer.Serialize(snapshot, JsonOptions);
-            await File.WriteAllTextAsync(_dataPath, json).ConfigureAwait(false);
+            var json =
+                JsonSerializer.Serialize(
+                    snapshot,
+                    JsonOptions);
+
+            await File.WriteAllTextAsync(
+                _dataPath,
+                json).ConfigureAwait(false);
         }
         finally
         {
@@ -109,23 +152,27 @@ public sealed class PlayerDataService : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
+
         _disposed = true;
-        
+
         if (_hasDirtyData)
         {
             _hasDirtyData = false;
+
             try
             {
-                // Use Task.Run to avoid potential deadlock with synchronization context
-                Task.Run(async () => await SaveAsync()).Wait(TimeSpan.FromSeconds(5));
+                Task.Run(
+                    async () => await SaveAsync())
+                    .Wait(TimeSpan.FromSeconds(5));
             }
-            catch (Exception)
+            catch
             {
-                // Ignore save errors during dispose - best effort
+                // Best effort during shutdown.
             }
         }
-        
+
         _fileLock.Dispose();
     }
 }
